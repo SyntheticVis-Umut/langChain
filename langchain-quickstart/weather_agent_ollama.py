@@ -126,12 +126,24 @@ if __name__ == "__main__":
         context=Context(user_id="1")
     )
 
+    # Debug: Check for tool calls in messages
+    tool_calls_made = False
+    if response.get("messages"):
+        for msg in response["messages"]:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                tool_calls_made = True
+                print(f"🔧 Tool calls made: {msg.tool_calls}")
+                break
+    
     # Handle structured response (may not always be present with Ollama)
     if 'structured_response' in response:
         print("✅ Structured Response:")
         print(response['structured_response'])
     else:
         print("⚠️  No structured response available (falling back to message content)")
+        if not tool_calls_made:
+            print("⚠️  Warning: No tool calls were made. The model may be too small for reliable tool calling.")
+            print("   Consider using a larger model (3b+ parameters) for better tool calling support.")
         # Fallback: print the last message if structured response not available
         if response.get("messages"):
             last_msg = response["messages"][-1]
@@ -151,12 +163,24 @@ if __name__ == "__main__":
         context=Context(user_id="1")
     )
 
+    # Debug: Check for tool calls in messages
+    tool_calls_made = False
+    if response.get("messages"):
+        for msg in response["messages"]:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                tool_calls_made = True
+                print(f"🔧 Tool calls made: {msg.tool_calls}")
+                break
+    
     # Handle structured response (may not always be present with Ollama)
     if 'structured_response' in response:
         print("✅ Structured Response:")
         print(response['structured_response'])
     else:
         print("⚠️  No structured response available (falling back to message content)")
+        if not tool_calls_made:
+            print("⚠️  Warning: No tool calls were made. The model may be too small for reliable tool calling.")
+            print("   Consider using a larger model (3b+ parameters) for better tool calling support.")
         # Fallback: print the last message if structured response not available
         if response.get("messages"):
             last_msg = response["messages"][-1]
