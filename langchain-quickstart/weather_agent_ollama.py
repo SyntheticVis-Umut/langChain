@@ -30,17 +30,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 # Define system prompt
 SYSTEM_PROMPT = """You are an expert weather forecaster, who speaks in puns.
 
-You have access to two tools that you MUST use when needed:
+You have access to two tools:
 
-1. get_user_location: Use this FIRST to get the user's location when they ask about "outside" or "where I am"
-2. get_weather_for_location: Use this to get the weather for a specific location (requires a city name)
+- get_weather_for_location: use this to get the weather for a specific location
+- get_user_location: use this to get the user's location
 
-IMPORTANT: When a user asks about the weather, you MUST:
-- First call get_user_location to find where they are
-- Then call get_weather_for_location with the location name
-- Then provide a punny response about the weather
-
-Always use the tools - don't just talk about using them. Actually call them."""
+If a user asks you for the weather, make sure you know the location. If you can tell from the question that they mean wherever they are, use the get_user_location tool to find their location."""
 
 # Define context schema
 @dataclass
@@ -63,6 +58,20 @@ def get_user_location(runtime: ToolRuntime[Context]) -> str:
     return "Florida" if user_id == "1" else "SF"
 
 
+# Configure model - using Ollama (local LLM)
+# Ollama configuration from environment variables
+ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+ollama_model = os.getenv("OLLAMA_MODEL", "granite3.1-moe:3b")
+
+model = ChatOllama(
+    model=ollama_model,
+    base_url=ollama_base_url,
+    temperature=0.1,
+    timeout=60,
+    num_ctx=4096,
+)
+
+
 # Define response format
 @dataclass
 class ResponseFormat:
@@ -73,17 +82,28 @@ class ResponseFormat:
     weather_conditions: str | None = None
 
 
+# Set up memory
+checkpointer = InMemorySaver()
+
+# Create agent
+# Use ToolStrategy for structured output with Ollama (works with any tool-calling model)
+agent = create_agent(
+    model=model,
+    system_prompt=SYSTEM_PROMPT,
+    tools=[get_user_location, get_weather_for_location],
+    context_schema=Context,
+    response_format=ToolStrategy(ResponseFormat),  # Use ToolStrategy for Ollama compatibility
+    checkpointer=checkpointer
+)
+
+
 # Run agent
 if __name__ == "__main__":
-    # Ollama configuration
-    # Default to localhost:11434, but can be overridden via environment variable
-    # If Ollama is in another Docker container, use the container name or IP
-    # Examples:
-    #   - Same Docker network: "http://ollama:11434"
-    #   - Host machine: "http://host.docker.internal:11434"
-    #   - Localhost: "http://localhost:11434"
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_model = os.getenv("OLLAMA_MODEL", "granite3.1-moe:3b")  # Default to llama3.2, can use llama2, mistral, etc.
+    # Check if environment variables are set
+    if not ollama_base_url:
+        print("Error: OLLAMA_BASE_URL environment variable is not set.")
+        print("Please set: export OLLAMA_BASE_URL=<your-ollama-url>")
+        exit(1)
     
     print(f"Connecting to Ollama at: {ollama_base_url}")
     print(f"Using model: {ollama_model}")
@@ -96,31 +116,6 @@ if __name__ == "__main__":
     else:
         print("ℹ️  LangSmith tracing disabled. Set LANGSMITH_TRACING=true to enable.")
     
-    # Configure model - using Ollama (local LLM)
-    # Note: Smaller models (like 2b) may have limited tool calling capabilities
-    # Consider using larger models (llama3.2:3b, llama3.2:7b, etc.) for better tool calling
-    model = ChatOllama(
-        model=ollama_model,
-        base_url=ollama_base_url,
-        temperature=0.1,  # Lower temperature for more deterministic tool calling
-        timeout=60,  # Longer timeout for local models
-        num_ctx=4096,  # Context window size
-    )
-    
-    # Set up memory
-    checkpointer = InMemorySaver()
-    
-    # Create agent
-    # Use ToolStrategy for structured output with Ollama (works with any tool-calling model)
-    agent = create_agent(
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[get_user_location, get_weather_for_location],
-        context_schema=Context,
-        response_format=ToolStrategy(ResponseFormat),  # Use ToolStrategy for Ollama compatibility
-        checkpointer=checkpointer
-    )
-    
     # `thread_id` is a unique identifier for a given conversation.
     config = {"configurable": {"thread_id": "1"}}
 
@@ -131,43 +126,22 @@ if __name__ == "__main__":
         context=Context(user_id="1")
     )
 
-    # Debug: Print all messages to see if tool calls were made
-    if response.get("messages"):
-        print("\n--- Message History (for debugging) ---")
-        tool_calls_found = False
-        for i, msg in enumerate(response["messages"]):
-            msg_type = type(msg).__name__
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                tool_calls_found = True
-                print(f"Message {i} ({msg_type}): ✅ Tool calls found: {msg.tool_calls}")
-            elif hasattr(msg, "content"):
-                content_preview = str(msg.content)[:100] + "..." if len(str(msg.content)) > 100 else msg.content
-                print(f"Message {i} ({msg_type}): {content_preview}")
-        if not tool_calls_found:
-            print("\n⚠️  WARNING: No tool calls were actually made!")
-            print("   The model is generating text about calling tools, but not actually calling them.")
-            print("   This is common with smaller models (2b parameters).")
-            print("   Solution: Use a larger model with better tool calling support:")
-            print("   - llama3.2:3b or llama3.2:7b")
-            print("   - mistral (7b)")
-            print("   - qwen2.5:7b")
-        print("--- End Message History ---\n")
-
     # Handle structured response (may not always be present with Ollama)
     if 'structured_response' in response:
-        print(f"Structured Response: {response['structured_response']}")
+        print("✅ Structured Response:")
+        print(response['structured_response'])
     else:
+        print("⚠️  No structured response available (falling back to message content)")
         # Fallback: print the last message if structured response not available
         if response.get("messages"):
             last_msg = response["messages"][-1]
             if hasattr(last_msg, "content") and last_msg.content:
                 print(f"Agent Response: {last_msg.content}")
-            elif hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                print(f"Tool calls made: {last_msg.tool_calls}")
             else:
                 print("Response:", response)
         else:
             print("Response:", response)
+    # Expected: ResponseFormat with punny_response and weather_conditions
 
     print("\n=== Follow-up Question ===")
     # Note that we can continue the conversation using the same `thread_id`.
@@ -179,8 +153,10 @@ if __name__ == "__main__":
 
     # Handle structured response (may not always be present with Ollama)
     if 'structured_response' in response:
+        print("✅ Structured Response:")
         print(response['structured_response'])
     else:
+        print("⚠️  No structured response available (falling back to message content)")
         # Fallback: print the last message if structured response not available
         if response.get("messages"):
             last_msg = response["messages"][-1]
@@ -190,4 +166,5 @@ if __name__ == "__main__":
                 print("Response:", response)
         else:
             print("Response:", response)
+    # Expected: ResponseFormat with punny_response (weather_conditions may be None)
 
