@@ -62,7 +62,7 @@ See `.env.example` for all available configuration options.
 2. **Run Ollama agent:**
    ```bash
    # Simple - uses .env file automatically
-   docker-compose up weather-agent-ollama --build
+   docker compose up weather-agent-ollama --build
 
    # Override specific values if needed
    OLLAMA_MODEL=llama3.2:3b docker-compose up weather-agent-ollama --build
