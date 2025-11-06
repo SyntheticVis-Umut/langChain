@@ -66,7 +66,7 @@ ollama_model = os.getenv("OLLAMA_MODEL", "granite3.1-moe:3b")
 model = ChatOllama(
     model=ollama_model,
     base_url=ollama_base_url,
-    temperature=0.1,
+    temperature=0.5,
     timeout=60,
     num_ctx=4096,
 )
