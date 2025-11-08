@@ -25,12 +25,95 @@ from langchain_ollama import ChatOllama
 from langchain.tools import tool, ToolRuntime
 from langgraph.checkpoint.memory import InMemorySaver
 
-# Configure logging
+# Configure logging - simplified format without timestamps
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.WARNING,  # Only show warnings and errors
+    format='%(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ANSI color codes for colorful output
+class Colors:
+    """ANSI color codes for terminal output."""
+    # Reset
+    RESET = '\033[0m'
+    
+    # Text colors
+    BLACK = '\033[30m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    
+    # Bright colors
+    BRIGHT_BLACK = '\033[90m'
+    BRIGHT_RED = '\033[91m'
+    BRIGHT_GREEN = '\033[92m'
+    BRIGHT_YELLOW = '\033[93m'
+    BRIGHT_BLUE = '\033[94m'
+    BRIGHT_MAGENTA = '\033[95m'
+    BRIGHT_CYAN = '\033[96m'
+    BRIGHT_WHITE = '\033[97m'
+    
+    # Background colors
+    BG_BLUE = '\033[44m'
+    BG_CYAN = '\033[46m'
+    BG_GREEN = '\033[42m'
+    BG_YELLOW = '\033[43m'
+    
+    # Styles
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    UNDERLINE = '\033[4m'
+
+
+def colorize(text: str, color: str, bold: bool = False) -> str:
+    """Apply color and optional bold styling to text."""
+    style = Colors.BOLD if bold else ''
+    return f"{style}{color}{text}{Colors.RESET}"
+
+
+def print_header(text: str, emoji: str = "🤖"):
+    """Print a colorful header with emoji."""
+    print(f"\n{colorize('═' * 60, Colors.BRIGHT_CYAN, bold=True)}")
+    print(f"{emoji}  {colorize(text, Colors.BRIGHT_CYAN, bold=True)}")
+    print(f"{colorize('═' * 60, Colors.BRIGHT_CYAN, bold=True)}")
+
+
+def print_section(text: str, emoji: str = "📋"):
+    """Print a section header with emoji."""
+    print(f"\n{emoji}  {colorize(text, Colors.BRIGHT_BLUE, bold=True)}")
+    print(f"{colorize('─' * 60, Colors.CYAN)}")
+
+
+def print_success(text: str, emoji: str = "✅"):
+    """Print a success message with emoji."""
+    print(f"{emoji}  {colorize(text, Colors.BRIGHT_GREEN)}")
+
+
+def print_warning(text: str, emoji: str = "⚠️"):
+    """Print a warning message with emoji."""
+    print(f"{emoji}  {colorize(text, Colors.BRIGHT_YELLOW)}")
+
+
+def print_error(text: str, emoji: str = "❌"):
+    """Print an error message with emoji."""
+    print(f"{emoji}  {colorize(text, Colors.BRIGHT_RED)}")
+
+
+def print_info(text: str, emoji: str = "ℹ️"):
+    """Print an info message with emoji."""
+    print(f"{emoji}  {colorize(text, Colors.BRIGHT_BLUE)}")
+
+
+def print_tool_call(tool_name: str):
+    """Print a tool call with colorful formatting."""
+    print(f"\n{colorize('🔧', Colors.BRIGHT_MAGENTA)}  {colorize('Calling tool:', Colors.MAGENTA, bold=True)} {colorize(tool_name, Colors.BRIGHT_MAGENTA, bold=True)}")
+    print(f"{colorize('─' * 60, Colors.MAGENTA)}")
 
 # LangSmith tracing is automatically enabled when environment variables are set:
 # - LANGSMITH_TRACING=true
@@ -84,16 +167,14 @@ def get_weather_for_location(city: str) -> str:
     """
     try:
         if not city or not city.strip():
-            logger.warning("Empty city name provided to get_weather_for_location")
             return "Error: Please provide a valid city name."
         
         # In a real implementation, this would call an actual weather API
         # For now, this is a mock implementation
         result = f"It's always sunny in {city.strip()}!"
-        logger.info(f"Weather retrieved for location: {city}")
         return result
     except Exception as e:
-        logger.error(f"Error getting weather for {city}: {str(e)}")
+        logger.error(f"Weather error: {str(e)}")
         return f"Error fetching weather data for {city}. Please try again later."
 
 
@@ -117,20 +198,17 @@ def get_user_location(runtime: ToolRuntime[Context]) -> str:
     """
     try:
         if not runtime or not runtime.context:
-            logger.warning("Missing context in get_user_location")
             return "Error: Unable to retrieve user location. Context is missing."
         
         user_id = runtime.context.user_id
         if not user_id:
-            logger.warning("Missing user_id in context")
             return "Error: User ID not found in context."
         
         # In a real implementation, this would query a user database
         location = "Florida" if user_id == "1" else "SF"
-        logger.info(f"Location retrieved for user {user_id}: {location}")
         return location
     except Exception as e:
-        logger.error(f"Error getting user location: {str(e)}")
+        logger.error(f"Location error: {str(e)}")
         return "Error retrieving user location. Please try again later."
 
 
@@ -158,8 +236,6 @@ model = ChatOllama(
     # repeat_penalty=1.1,  # Reduce repetition
 )
 
-logger.info(f"Initialized ChatOllama model: {ollama_model} at {ollama_base_url}")
-
 
 # Define response format
 @dataclass
@@ -184,8 +260,6 @@ agent = create_agent(
     response_format=ToolStrategy(ResponseFormat),  # Use ToolStrategy for Ollama compatibility
     checkpointer=checkpointer
 )
-
-logger.info("Agent created successfully with tools and structured output support")
 
 
 def extract_response(response: Dict[str, Any], verbose: bool = True) -> Dict[str, Any]:
@@ -218,204 +292,207 @@ def extract_response(response: Dict[str, Any], verbose: bool = True) -> Dict[str
         for msg in response["messages"]:
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 result["tool_calls"] = msg.tool_calls
-                if verbose:
-                    logger.debug(f"Tool calls detected: {msg.tool_calls}")
                 break
     
     # Handle structured response (preferred)
     if 'structured_response' in response and response['structured_response']:
         result["structured_response"] = response['structured_response']
         result["has_structured"] = True
-        if verbose:
-            logger.info("Structured response available")
     else:
         # Fallback to message content
         if response.get("messages"):
             last_msg = response["messages"][-1]
             if hasattr(last_msg, "content") and last_msg.content:
                 result["message_content"] = last_msg.content
-                if verbose:
-                    logger.warning("No structured response, using message content")
-                    if not result["tool_calls"]:
-                        logger.warning(
-                            "No tool calls detected. The model may be too small for reliable tool calling. "
-                            "Consider using a larger model (3b+ parameters) for better tool calling support."
-                        )
-            else:
-                if verbose:
-                    logger.warning("No content found in response messages")
-        else:
-            if verbose:
-                logger.warning("No messages found in response")
     
     return result
 
 
 def print_response(extracted: Dict[str, Any], show_tool_calls: bool = True):
     """
-    Print the extracted response in a user-friendly format.
+    Print the extracted response in a user-friendly format with colors.
     
     Args:
         extracted: The result dictionary from extract_response()
         show_tool_calls: Whether to display tool call information
     """
     if show_tool_calls and extracted["tool_calls"]:
-        print(f"🔧 Tool calls made: {extracted['tool_calls']}")
+        print_tool_call("Multiple tools")
+        for tool_call in extracted["tool_calls"]:
+            tool_name = tool_call.get("name", "unknown")
+            print(f"  {colorize('•', Colors.BRIGHT_MAGENTA)} {colorize(tool_name, Colors.BRIGHT_MAGENTA)}")
     
     if extracted["has_structured"]:
-        print("✅ Structured Response:")
-        print(extracted['structured_response'])
+        print_success("Structured Response:", "✅")
+        print(f"{colorize(str(extracted['structured_response']), Colors.BRIGHT_WHITE)}")
     else:
-        print("⚠️  No structured response available (falling back to message content)")
+        print_warning("No structured response available (falling back to message content)")
         if not extracted["tool_calls"]:
-            print("⚠️  Warning: No tool calls were made. The model may be too small for reliable tool calling.")
-            print("   Consider using a larger model (3b+ parameters) for better tool calling support.")
+            print_warning("No tool calls were made. The model may be too small for reliable tool calling.")
+            print_info("Consider using a larger model (3b+ parameters) for better tool calling support.")
         
         if extracted["message_content"]:
-            print(f"Agent Response: {extracted['message_content']}")
+            print(f"{colorize('Agent Response:', Colors.BRIGHT_GREEN, bold=True)} {colorize(extracted['message_content'], Colors.BRIGHT_WHITE)}")
         else:
-            print("⚠️  No response content available")
+            print_warning("No response content available")
+
+
+def stream_agent_response(agent, messages: list, config: dict, context: Context):
+    """
+    Stream agent response using stream_mode="messages" for token-level streaming.
+    Based on: https://docs.langchain.com/oss/python/langchain/streaming
+    
+    Args:
+        agent: The agent instance
+        messages: List of input messages
+        config: Agent configuration (thread_id, etc.)
+        context: Runtime context
+    """
+    tool_calls_shown = set()  # Track which tool calls we've shown
+    
+    for token, metadata in agent.stream(
+        {"messages": messages},
+        config=config,
+        context=context,
+        stream_mode="messages"  # Stream LLM tokens as they're generated
+    ):
+        # Extract node information from metadata
+        node = metadata.get("langgraph_node", "unknown")
+        
+        # Process content_blocks from the token
+        if hasattr(token, "content_blocks"):
+            content_blocks = token.content_blocks
+        elif isinstance(token, dict) and "content_blocks" in token:
+            content_blocks = token["content_blocks"]
+        else:
+            content_blocks = []
+        
+        # Process each content block
+        for block in content_blocks:
+            if isinstance(block, dict):
+                block_type = block.get("type", "")
+                
+                # Handle text tokens - stream incrementally with color
+                if block_type == "text" and "text" in block:
+                    text = block["text"]
+                    if text:
+                        # Colorize the streaming text
+                        print(f"{colorize(text, Colors.BRIGHT_WHITE)}", end="", flush=True)
+                
+                # Handle tool call chunks
+                elif block_type == "tool_call_chunk":
+                    tool_name = block.get("name")
+                    tool_args = block.get("args", "")
+                    tool_id = block.get("id")
+                    
+                    # Show tool call info when we have the name
+                    if tool_name and tool_id and tool_name not in tool_calls_shown:
+                        print_tool_call(tool_name)
+                        tool_calls_shown.add(tool_name)
+                    # Stream tool args as they're generated (optional - usually not needed)
+                    elif tool_args and isinstance(tool_args, str) and tool_args.strip():
+                        # Only print if it's meaningful content (not just partial JSON)
+                        pass
+            
+            # Handle content_blocks as objects (if they have attributes)
+            elif hasattr(block, "type"):
+                if block.type == "text" and hasattr(block, "text"):
+                    print(f"{colorize(block.text, Colors.BRIGHT_WHITE)}", end="", flush=True)
+    
+    print()  # Final newline after streaming
 
 
 # Run agent
 if __name__ == "__main__":
     # Check if environment variables are set
     if not ollama_base_url:
-        logger.error("OLLAMA_BASE_URL environment variable is not set")
-        print("Error: OLLAMA_BASE_URL environment variable is not set.")
-        print("Please set: export OLLAMA_BASE_URL=<your-ollama-url>")
+        print_error("OLLAMA_BASE_URL environment variable is not set.")
+        print_info(f"Please set: {colorize('export OLLAMA_BASE_URL=<your-ollama-url>', Colors.BRIGHT_CYAN)}")
         exit(1)
     
-    print("=" * 50)
-    print("🤖 LLM Configuration")
-    print("=" * 50)
-    print(f"Provider: Ollama")
-    print(f"Base URL: {ollama_base_url}")
-    print(f"Model: {ollama_model}")
-    print(f"LLM Class: ChatOllama")
-    print(f"Temperature: 0.5")
-    print(f"Context Window: 4096")
-    print("=" * 50)
+    # Print colorful header
+    print_header("LLM Configuration", "🤖")
+    print(f"{colorize('Provider:', Colors.CYAN, bold=True)} {colorize('Ollama', Colors.BRIGHT_GREEN, bold=True)}")
+    print(f"{colorize('Base URL:', Colors.CYAN, bold=True)} {colorize(ollama_base_url, Colors.BRIGHT_WHITE)}")
+    print(f"{colorize('Model:', Colors.CYAN, bold=True)} {colorize(ollama_model, Colors.BRIGHT_WHITE)}")
+    print(f"{colorize('LLM Class:', Colors.CYAN, bold=True)} {colorize('ChatOllama', Colors.BRIGHT_WHITE)}")
+    print(f"{colorize('Temperature:', Colors.CYAN, bold=True)} {colorize('0.5', Colors.BRIGHT_YELLOW)}")
+    print(f"{colorize('Context Window:', Colors.CYAN, bold=True)} {colorize('4096', Colors.BRIGHT_YELLOW)}")
     
     # LangSmith tracing (optional but recommended)
     if os.getenv("LANGSMITH_TRACING") == "true":
         langsmith_project = os.getenv("LANGSMITH_PROJECT", "weather-agent")
-        print(f"✅ LangSmith tracing enabled (project: {langsmith_project})")
-        print(f"   View traces at: https://smith.langchain.com")
-        logger.info(f"LangSmith tracing enabled for project: {langsmith_project}")
+        print_success(f"LangSmith tracing enabled (project: {colorize(langsmith_project, Colors.BRIGHT_CYAN, bold=True)})", "✅")
+        print_info(f"View traces at: {colorize('https://smith.langchain.com', Colors.BRIGHT_CYAN, bold=True)}", "🔗")
     else:
-        print("ℹ️  LangSmith tracing disabled. Set LANGSMITH_TRACING=true to enable.")
-        logger.info("LangSmith tracing disabled")
+        print_warning("LangSmith tracing disabled. Set LANGSMITH_TRACING=true to enable.", "ℹ️")
     
     # `thread_id` is a unique identifier for a given conversation.
     config = {"configurable": {"thread_id": "1"}}
 
-    # Example 1: First question with tool usage
-    print("\n=== First Question ===")
+    # Example 1: First question with streaming
+    print_section("First Question", "💬")
+    print(f"{colorize('User:', Colors.BRIGHT_BLUE, bold=True)} {colorize('what is the weather outside?', Colors.WHITE)}")
+    print(f"{colorize('Agent:', Colors.BRIGHT_GREEN, bold=True)} ", end="")
     try:
-        response = agent.invoke(
-            {"messages": [{"role": "user", "content": "what is the weather outside?"}]},
+        stream_agent_response(
+            agent=agent,
+            messages=[{"role": "user", "content": "what is the weather outside?"}],
             config=config,
             context=Context(user_id="1")
         )
         
-        extracted = extract_response(response, verbose=True)
-        print_response(extracted, show_tool_calls=True)
-        # Expected: ResponseFormat with punny_response and weather_conditions
-        
     except Exception as e:
-        logger.error(f"Error during agent invocation: {str(e)}", exc_info=True)
-        print(f"❌ Error: {str(e)}")
-        print("Please check your Ollama connection and model availability.")
-
-    # Example 2: Follow-up question (continuing conversation)
-    print("\n=== Follow-up Question ===")
-    # Note that we can continue the conversation using the same `thread_id`.
-    try:
-        response = agent.invoke(
-            {"messages": [{"role": "user", "content": "thank you! see you later!"}]},
-            config=config,
-            context=Context(user_id="1")
-        )
-        
-        extracted = extract_response(response, verbose=True)
-        print_response(extracted, show_tool_calls=True)
-        # Expected: ResponseFormat with punny_response (weather_conditions may be None)
-        
-    except Exception as e:
-        logger.error(f"Error during agent invocation: {str(e)}", exc_info=True)
-        print(f"❌ Error: {str(e)}")
-        print("Please check your Ollama connection and model availability.")
-    
-    # Example 3: Streaming support with stream_mode="messages" for token-level streaming
-    # Based on: https://docs.langchain.com/oss/python/langchain/streaming
-    print("\n=== Streaming Example ===")
-    print("Streaming response (real-time feedback):")
-    try:
-        for token, metadata in agent.stream(
-            {"messages": [{"role": "user", "content": "what's the weather in New York?"}]},
-            config=config,
-            context=Context(user_id="1"),
-            stream_mode="messages"  # Stream LLM tokens as they're generated
-        ):
-            # Extract node information from metadata
-            node = metadata.get("langgraph_node", "unknown")
-            
-            # Process content_blocks from the token
-            if hasattr(token, "content_blocks"):
-                content_blocks = token.content_blocks
-            elif isinstance(token, dict) and "content_blocks" in token:
-                content_blocks = token["content_blocks"]
-            else:
-                content_blocks = []
-            
-            # Process each content block
-            for block in content_blocks:
-                if isinstance(block, dict):
-                    block_type = block.get("type", "")
-                    
-                    # Handle text tokens - stream incrementally
-                    if block_type == "text" and "text" in block:
-                        text = block["text"]
-                        if text:
-                            print(text, end="", flush=True)
-                    
-                    # Handle tool call chunks
-                    elif block_type == "tool_call_chunk":
-                        tool_name = block.get("name")
-                        tool_args = block.get("args", "")
-                        tool_id = block.get("id")
-                        
-                        # Show tool call info when we have the name
-                        if tool_name and tool_id:
-                            print(f"\n🔧 Calling tool: {tool_name}\n", flush=True)
-                        # Stream tool args as they're generated
-                        elif tool_args and isinstance(tool_args, str) and tool_args.strip():
-                            # Only print if it's meaningful content (not just partial JSON)
-                            pass
-                
-                # Handle content_blocks as objects (if they have attributes)
-                elif hasattr(block, "type"):
-                    if block.type == "text" and hasattr(block, "text"):
-                        print(block.text, end="", flush=True)
-        
-        print()  # Final newline
-        print("✅ Streaming complete")
-        
-    except Exception as e:
-        logger.error(f"Error during streaming: {str(e)}", exc_info=True)
-        print(f"❌ Error: {str(e)}")
+        logger.error(f"Streaming error: {str(e)}")
+        print_error(f"Error: {str(e)}")
+        print_warning("Please check your Ollama connection and model availability.")
         # Fallback to regular invoke if streaming fails
-        print("\n⚠️  Falling back to non-streaming mode...")
+        print_warning("Falling back to non-streaming mode...", "🔄")
         try:
             response = agent.invoke(
-                {"messages": [{"role": "user", "content": "what's the weather in New York?"}]},
+                {"messages": [{"role": "user", "content": "what is the weather outside?"}]},
                 config=config,
                 context=Context(user_id="1")
             )
             extracted = extract_response(response, verbose=False)
             print_response(extracted, show_tool_calls=True)
         except Exception as fallback_error:
-            logger.error(f"Fallback also failed: {str(fallback_error)}", exc_info=True)
-            print(f"❌ Fallback error: {str(fallback_error)}")
+            logger.error(f"Fallback error: {str(fallback_error)}")
+            print_error(f"Fallback error: {str(fallback_error)}")
+
+    # Example 2: Follow-up question with streaming (continuing conversation)
+    print_section("Follow-up Question", "💬")
+    print(f"{colorize('User:', Colors.BRIGHT_BLUE, bold=True)} {colorize('thank you! see you later!', Colors.WHITE)}")
+    print(f"{colorize('Agent:', Colors.BRIGHT_GREEN, bold=True)} ", end="")
+    # Note that we can continue the conversation using the same `thread_id`.
+    try:
+        stream_agent_response(
+            agent=agent,
+            messages=[{"role": "user", "content": "thank you! see you later!"}],
+            config=config,
+            context=Context(user_id="1")
+        )
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}")
+        print_error(f"Error: {str(e)}")
+        print_warning("Please check your Ollama connection and model availability.")
+        # Fallback to regular invoke if streaming fails
+        print_warning("Falling back to non-streaming mode...", "🔄")
+        try:
+            response = agent.invoke(
+                {"messages": [{"role": "user", "content": "thank you! see you later!"}]},
+                config=config,
+                context=Context(user_id="1")
+            )
+            extracted = extract_response(response, verbose=False)
+            print_response(extracted, show_tool_calls=True)
+        except Exception as fallback_error:
+            logger.error(f"Fallback error: {str(fallback_error)}")
+            print_error(f"Fallback error: {str(fallback_error)}")
+    
+    # Final message
+    print()
+    print_success("Conversation completed!", "✨")
+
 
