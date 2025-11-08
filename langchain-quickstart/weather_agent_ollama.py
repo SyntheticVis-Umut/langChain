@@ -12,15 +12,21 @@ Demonstrates:
 8. Error handling and graceful degradation
 9. Streaming support for real-time feedback
 10. Improved tool descriptions for better tool calling
+11. Middleware for monitoring and control (ModelCallLimitMiddleware)
 """
 
 import os
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    AgentMiddleware,
+    AgentState,
+)
 from langchain_ollama import ChatOllama
 from langchain.tools import tool, ToolRuntime
 from langgraph.checkpoint.memory import InMemorySaver
@@ -247,10 +253,51 @@ class ResponseFormat:
     weather_conditions: str | None = None
 
 
+# Custom middleware for monitoring and logging
+class MonitoringMiddleware(AgentMiddleware):
+    """Middleware to monitor agent execution with colorful output."""
+    
+    def before_model(self, state: AgentState, runtime) -> dict[str, Any] | None:
+        """Called before model invocation."""
+        # Track model calls (could be used for metrics)
+        return None
+    
+    def after_model(self, state: AgentState, runtime) -> dict[str, Any] | None:
+        """Called after model invocation."""
+        # Check for tool calls in the response
+        if state.get("messages"):
+            last_msg = state["messages"][-1]
+            if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+                # Tool calls are already displayed in stream_agent_response
+                pass
+        return None
+    
+    def before_tool(self, state: AgentState, runtime) -> dict[str, Any] | None:
+        """Called before tool execution."""
+        # Tool execution monitoring (already handled in stream_agent_response)
+        return None
+    
+    def after_tool(self, state: AgentState, runtime) -> dict[str, Any] | None:
+        """Called after tool execution."""
+        # Tool completion monitoring
+        return None
+
+
 # Set up memory
 checkpointer = InMemorySaver()
 
-# Create agent
+# Configure middleware
+# ModelCallLimitMiddleware prevents infinite loops and excessive API calls
+middleware = [
+    ModelCallLimitMiddleware(
+        thread_limit=20,  # Max 20 model calls per conversation thread
+        run_limit=10,  # Max 10 model calls per single invocation
+        exit_behavior="end",  # Gracefully end when limit reached
+    ),
+    MonitoringMiddleware(),  # Custom monitoring middleware
+]
+
+# Create agent with middleware
 # Use ToolStrategy for structured output with Ollama (works with any tool-calling model)
 agent = create_agent(
     model=model,
@@ -258,7 +305,8 @@ agent = create_agent(
     tools=[get_user_location, get_weather_for_location],
     context_schema=Context,
     response_format=ToolStrategy(ResponseFormat),  # Use ToolStrategy for Ollama compatibility
-    checkpointer=checkpointer
+    checkpointer=checkpointer,
+    middleware=middleware,  # Add middleware for monitoring and control
 )
 
 
@@ -418,6 +466,7 @@ if __name__ == "__main__":
     print(f"{colorize('LLM Class:', Colors.CYAN, bold=True)} {colorize('ChatOllama', Colors.BRIGHT_WHITE)}")
     print(f"{colorize('Temperature:', Colors.CYAN, bold=True)} {colorize('0.5', Colors.BRIGHT_YELLOW)}")
     print(f"{colorize('Context Window:', Colors.CYAN, bold=True)} {colorize('4096', Colors.BRIGHT_YELLOW)}")
+    print(f"{colorize('Middleware:', Colors.CYAN, bold=True)} {colorize('ModelCallLimitMiddleware, MonitoringMiddleware', Colors.BRIGHT_WHITE)}")
     
     # LangSmith tracing (optional but recommended)
     if os.getenv("LANGSMITH_TRACING") == "true":
