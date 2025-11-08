@@ -5,14 +5,13 @@ Demonstrates:
 1. Detailed system prompts
 2. Tools that integrate with external data
 3. Model configuration with Ollama
-4. Structured output
-5. Conversational memory
-6. Full agent creation and execution
-7. LangSmith tracing and observability
-8. Error handling and graceful degradation
-9. Streaming support for real-time feedback
-10. Improved tool descriptions for better tool calling
-11. Middleware for monitoring and control (ModelCallLimitMiddleware)
+4. Conversational memory
+5. Full agent creation and execution
+6. LangSmith tracing and observability
+7. Error handling and graceful degradation
+8. Streaming support for real-time feedback
+9. Improved tool descriptions for better tool calling
+10. Middleware for monitoring and control (ModelCallLimitMiddleware)
 """
 
 import os
@@ -21,7 +20,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Callable
 
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     AgentMiddleware,
@@ -135,11 +133,9 @@ You have access to two tools:
 
 1. get_weather_for_location(city: str): Use this tool to get weather information for a specific city or location.
    - Call this when the user explicitly mentions a city name or location.
-   - Example: "What's the weather in New York?" -> use get_weather_for_location("New York")
 
 2. get_user_location(): Use this tool to retrieve the user's current location.
    - Call this when the user asks about weather at their current location or "where I am".
-   - Example: "What's the weather outside?" -> first use get_user_location(), then get_weather_for_location()
 
 IMPORTANT: Always determine the location before providing weather information. If the user's question implies their current location, use get_user_location() first to find out where they are, then use get_weather_for_location() with that location.
 
@@ -243,16 +239,6 @@ model = ChatOllama(
 )
 
 
-# Define response format
-@dataclass
-class ResponseFormat:
-    """Response schema for the agent."""
-    # A punny response (always required)
-    punny_response: str
-    # Any interesting information about the weather if available
-    weather_conditions: str | None = None
-
-
 # Custom middleware for monitoring and logging
 class MonitoringMiddleware(AgentMiddleware):
     """Middleware to monitor agent execution with colorful output."""
@@ -298,13 +284,11 @@ middleware = [
 ]
 
 # Create agent with middleware
-# Use ToolStrategy for structured output with Ollama (works with any tool-calling model)
 agent = create_agent(
     model=model,
     system_prompt=SYSTEM_PROMPT,
     tools=[get_user_location, get_weather_for_location],
     context_schema=Context,
-    response_format=ToolStrategy(ResponseFormat),  # Use ToolStrategy for Ollama compatibility
     checkpointer=checkpointer,
     middleware=middleware,  # Add middleware for monitoring and control
 )
@@ -406,6 +390,10 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
     ):
         # Extract node information from metadata
         node = metadata.get("langgraph_node", "unknown")
+        
+        # Only process tokens from the model node, skip tool node outputs
+        if node != "model":
+            continue
         
         # Process content_blocks from the token
         if hasattr(token, "content_blocks"):
