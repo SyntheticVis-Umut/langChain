@@ -478,6 +478,8 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
     tool_calls_shown = set()  # Track which tool calls we've shown
     tool_results_shown = set()  # Track which tool results we've shown
     last_messages_count = 0  # Track message count to detect new tool results
+    tool_execution_phase = False  # Track if we're in tool execution phase
+    response_started = False  # Track if agent response has started
     
     for token, metadata in agent.stream(
         {"messages": messages},
@@ -505,6 +507,7 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                               (isinstance(msg, dict) and msg.get("type") == "tool"))
                 
                 if is_tool_msg:
+                    tool_execution_phase = True
                     # Extract tool name and content
                     if hasattr(msg, "name"):
                         tool_name = msg.name
@@ -520,11 +523,11 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     else:
                         content = str(msg)
                     
-                    # Show tool result
+                    # Show tool result with better formatting
                     tool_id = f"{tool_name}_{str(content)[:50]}"
                     if tool_id not in tool_results_shown:
-                        print_tool_call(f"{tool_name} (result)")
-                        print(f"{colorize(str(content), Colors.BRIGHT_YELLOW)}")
+                        print(f"  {colorize('→ Result:', Colors.MAGENTA, bold=True)} {colorize(str(content), Colors.BRIGHT_YELLOW)}")
+                        print()  # Add spacing
                         tool_results_shown.add(tool_id)
             
             last_messages_count = len(token_messages)
@@ -537,6 +540,7 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
         
         # Handle tool execution results (if token is a ToolMessage)
         if is_tool_message or node in ["tools", "tool"]:
+            tool_execution_phase = True
             # Extract tool name and content
             if hasattr(token, "name"):
                 tool_name = token.name
@@ -555,8 +559,8 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
             # Show tool result if we haven't shown it yet
             tool_id = f"{tool_name}_{str(content)[:50]}"
             if tool_name and tool_id not in tool_results_shown:
-                print_tool_call(f"{tool_name} (result)")
-                print(f"{colorize(str(content), Colors.BRIGHT_YELLOW)}")
+                print(f"  {colorize('→ Result:', Colors.MAGENTA, bold=True)} {colorize(str(content), Colors.BRIGHT_YELLOW)}")
+                print()  # Add spacing
                 tool_results_shown.add(tool_id)
             continue
         
@@ -583,6 +587,13 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     if text:
                         text = str(text)
                         if text:
+                            # If we just finished tool execution, add separator before response
+                            if tool_execution_phase and not response_started:
+                                print(f"{colorize('─' * 60, Colors.CYAN)}")
+                                print(f"{colorize('💬 Response:', Colors.BRIGHT_GREEN, bold=True)}")
+                                print()  # Add spacing
+                                response_started = True
+                                tool_execution_phase = False
                             # Colorize the streaming text
                             print(f"{colorize(text, Colors.BRIGHT_WHITE)}", end="", flush=True)
                 
@@ -594,7 +605,16 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     
                     # Show tool call info when we have the name
                     if tool_name and tool_id and tool_name not in tool_calls_shown:
-                        print_tool_call(tool_name)
+                        tool_execution_phase = True
+                        if not response_started:
+                            print()  # Add spacing before tool calls
+                        print(f"{colorize('🔧', Colors.BRIGHT_MAGENTA)}  {colorize('Calling tool:', Colors.MAGENTA, bold=True)} {colorize(tool_name, Colors.BRIGHT_MAGENTA, bold=True)}")
+                        if tool_args and isinstance(tool_args, dict) and tool_args:
+                            # Display tool arguments if available
+                            args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items() if v])
+                            if args_str:
+                                print(f"  {colorize('Arguments:', Colors.DIM)} {colorize(args_str, Colors.WHITE)}")
+                        print()  # Add spacing after tool call
                         tool_calls_shown.add(tool_name)
                     # Stream tool args as they're generated (optional - usually not needed)
                     elif tool_args and isinstance(tool_args, str) and tool_args.strip():
@@ -606,9 +626,17 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                 if block.type == "text" and hasattr(block, "text"):
                     text = str(block.text)
                     if text:
+                        # If we just finished tool execution, add separator before response
+                        if tool_execution_phase and not response_started:
+                            print(f"{colorize('─' * 60, Colors.CYAN)}")
+                            print(f"{colorize('💬 Response:', Colors.BRIGHT_GREEN, bold=True)}")
+                            print()  # Add spacing
+                            response_started = True
+                            tool_execution_phase = False
                         print(f"{colorize(text, Colors.BRIGHT_WHITE)}", end="", flush=True)
     
     print()  # Final newline after streaming
+    print()  # Add extra spacing after response
 
 
 # Run agent
