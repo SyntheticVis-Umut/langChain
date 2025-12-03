@@ -16,9 +16,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
 from langchain_ollama import ChatOllama
 from langchain.tools import tool, ToolRuntime
 from langgraph.checkpoint.memory import InMemorySaver
@@ -137,6 +135,22 @@ You have access to two tools:
    - If NO: Call this tool with the location
    - Example: If you see "get_weather_for_location('Florida') -> It's always sunny in Florida!" in history, you already know the weather. DO NOT call the tool again.
 
+STEP-BY-STEP WORKFLOW FOR EACH USER QUESTION:
+Step 1: Read ALL previous messages in the conversation history
+Step 2: Look for any get_user_location() calls - if found, note the location (e.g., "Florida")
+Step 3: Look for any get_weather_for_location() calls - if found, note the weather information
+Step 4: If you already have both location AND weather from history, answer using that information WITHOUT calling any tools
+Step 5: If you're missing location, call get_user_location() ONLY if you haven't called it before
+Step 6: If you're missing weather, call get_weather_for_location() ONLY if you haven't called it for that location before
+
+CONCRETE EXAMPLE:
+- User asks: "what to wear today"
+- You call: get_user_location() -> "Florida"
+- You call: get_weather_for_location("Florida") -> "It's always sunny in Florida!"
+- User asks: "where to visit in my city under this weather?"
+- You see in history: location="Florida", weather="It's always sunny in Florida!"
+- You answer using that information WITHOUT calling any tools
+
 Always respond with puns and a friendly, engaging tone while providing accurate weather information."""
 
 # Define context schema
@@ -144,12 +158,6 @@ Always respond with puns and a friendly, engaging tone while providing accurate 
 class Context:
     """Custom runtime context schema."""
     user_id: str
-
-
-# Define structured response schema
-class AgentResponse(BaseModel):
-    """Structured response format for agent output."""
-    response: str = Field(description="The agent's response to the user's query")
 
 
 # Define tools with improved descriptions
@@ -238,14 +246,13 @@ model = ChatOllama(
 # Set up memory
 checkpointer = InMemorySaver()
 
-# Create agent with structured output support
+# Create agent
 agent = create_agent(
     model=model,
     system_prompt=SYSTEM_PROMPT,
     tools=[get_user_location, get_weather_for_location],
     context_schema=Context,
     checkpointer=checkpointer,
-    response_format=ToolStrategy(AgentResponse),  # Enable structured output
 )
 
 def extract_response(response: Dict[str, Any], verbose: bool = True) -> Dict[str, Any]:
@@ -467,161 +474,11 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
         messages: List of input messages
         config: Agent configuration (thread_id, etc.)
         context: Runtime context
-    
-    Returns:
-        The final state containing structured_response if available
     """
     tool_calls_shown = set()  # Track which tool calls we've shown
     tool_results_shown = set()  # Track which tool results we've shown
     last_messages_count = 0  # Track message count to detect new tool results
-    tool_execution_phase = False  # Track if we're in tool execution phase
-    response_started = False  # Track if agent response has started
-    final_state = None  # Capture final state for structured response
     
-    # Use stream_mode="values" to capture structured_response in final state
-    for chunk in agent.stream(
-        {"messages": messages},
-        config=config,
-        context=context,
-        stream_mode="values"  # Use values to get full state including structured_response
-    ):
-        # Capture the final state (for structured responses)
-        final_state = chunk
-        
-        # Extract token and metadata for display
-        token = chunk
-        metadata = {}
-        
-        # For values mode, we need to process messages differently
-        if isinstance(chunk, dict):
-            # Extract messages from state
-            token_messages = chunk.get("messages", [])
-            # Check for structured response
-            if "structured_response" in chunk:
-                # Skip displaying structured response during streaming (we'll show it at the end)
-                continue
-        else:
-            token_messages = []
-        
-        # Process messages to show tool calls and responses
-        if token_messages and len(token_messages) > last_messages_count:
-            new_messages = token_messages[last_messages_count:]
-            
-            # Display tool calls from AI messages
-            for msg in new_messages:
-                msg_type = type(msg).__name__ if hasattr(type(msg), "__name__") else str(type(msg))
-                is_ai = (msg_type == "AIMessage" or 
-                        (hasattr(msg, "type") and getattr(msg, "type", None) == "ai") or
-                        (isinstance(msg, dict) and msg.get("type") == "ai"))
-                
-                if is_ai:
-                    # Check for tool calls
-                    tool_calls = None
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        tool_calls = msg.tool_calls
-                    elif isinstance(msg, dict) and "tool_calls" in msg:
-                        tool_calls = msg.get("tool_calls", [])
-                    
-                    # Display tool calls (skip structured response tool)
-                    if tool_calls:
-                        for tool_call in tool_calls:
-                            if isinstance(tool_call, dict):
-                                tool_name = tool_call.get("name", "")
-                                tool_args = tool_call.get("args", {})
-                            else:
-                                tool_name = getattr(tool_call, "name", "")
-                                tool_args = getattr(tool_call, "args", {})
-                            
-                            # Skip structured response tool (it's internal)
-                            if "AgentResponse" in tool_name or tool_name.endswith("Response"):
-                                continue
-                            
-                            if tool_name and tool_name not in tool_calls_shown:
-                                tool_execution_phase = True
-                                if not response_started:
-                                    print()  # Add spacing before tool calls
-                                print(f"{colorize('🔧', Colors.BRIGHT_MAGENTA)}  {colorize('Calling tool:', Colors.MAGENTA, bold=True)} {colorize(tool_name, Colors.BRIGHT_MAGENTA, bold=True)}")
-                                if tool_args and isinstance(tool_args, dict) and tool_args:
-                                    args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items() if v])
-                                    if args_str:
-                                        print(f"  {colorize('Arguments:', Colors.DIM)} {colorize(args_str, Colors.WHITE)}")
-                                print()  # Add spacing after tool call
-                                tool_calls_shown.add(tool_name)
-                    
-                    # Display text content (but filter out structured response JSON)
-                    if hasattr(msg, "content"):
-                        content = msg.content
-                    elif isinstance(msg, dict):
-                        content = msg.get("content", "")
-                    else:
-                        content = ""
-                    
-                    if content and isinstance(content, str) and content.strip():
-                        # Check if content is JSON (structured response) - skip it
-                        import json
-                        try:
-                            parsed = json.loads(content.strip())
-                            # If it looks like our structured response format, skip it
-                            if isinstance(parsed, dict) and "response" in parsed:
-                                # This is a structured response JSON - don't display it here
-                                continue
-                        except (json.JSONDecodeError, ValueError):
-                            # Not JSON, proceed with display
-                            pass
-                        
-                        # Skip if we've already displayed this content (avoid duplicates)
-                        content_id = f"content_{hash(content[:100])}"
-                        if content_id in tool_results_shown:
-                            continue
-                        tool_results_shown.add(content_id)
-                        
-                        # If we just finished tool execution, add separator before response
-                        if tool_execution_phase and not response_started:
-                            print(f"{colorize('─' * 60, Colors.CYAN)}")
-                            print(f"{colorize('💬 Response:', Colors.BRIGHT_GREEN, bold=True)}")
-                            print()  # Add spacing
-                            response_started = True
-                            tool_execution_phase = False
-                        print(f"{colorize(content, Colors.BRIGHT_WHITE)}", end="", flush=True)
-            
-            # Display tool results
-            for msg in new_messages:
-                msg_type = type(msg).__name__ if hasattr(type(msg), "__name__") else str(type(msg))
-                is_tool_msg = (msg_type == "ToolMessage" or 
-                              (hasattr(msg, "type") and getattr(msg, "type", None) == "tool") or
-                              (isinstance(msg, dict) and msg.get("type") == "tool"))
-                
-                if is_tool_msg:
-                    tool_execution_phase = True
-                    # Extract tool name and content
-                    if hasattr(msg, "name"):
-                        tool_name = msg.name
-                    elif isinstance(msg, dict):
-                        tool_name = msg.get("name", "unknown")
-                    else:
-                        tool_name = "unknown"
-                    
-                    if hasattr(msg, "content"):
-                        content = msg.content
-                    elif isinstance(msg, dict):
-                        content = msg.get("content", "")
-                    else:
-                        content = str(msg)
-                    
-                    # Show tool result with better formatting
-                    tool_id = f"{tool_name}_{str(content)[:50]}"
-                    if tool_id not in tool_results_shown:
-                        print(f"  {colorize('→ Result:', Colors.MAGENTA, bold=True)} {colorize(str(content), Colors.BRIGHT_YELLOW)}")
-                        print()  # Add spacing
-                        tool_results_shown.add(tool_id)
-            
-            last_messages_count = len(token_messages)
-        
-        # Skip the old token-based processing for values mode
-        continue
-    
-    # Fallback to old token-based processing if needed (for messages mode)
-    # This section is kept for compatibility but won't be reached in values mode
     for token, metadata in agent.stream(
         {"messages": messages},
         config=config,
@@ -648,7 +505,6 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                               (isinstance(msg, dict) and msg.get("type") == "tool"))
                 
                 if is_tool_msg:
-                    tool_execution_phase = True
                     # Extract tool name and content
                     if hasattr(msg, "name"):
                         tool_name = msg.name
@@ -664,11 +520,11 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     else:
                         content = str(msg)
                     
-                    # Show tool result with better formatting
+                    # Show tool result
                     tool_id = f"{tool_name}_{str(content)[:50]}"
                     if tool_id not in tool_results_shown:
-                        print(f"  {colorize('→ Result:', Colors.MAGENTA, bold=True)} {colorize(str(content), Colors.BRIGHT_YELLOW)}")
-                        print()  # Add spacing
+                        print_tool_call(f"{tool_name} (result)")
+                        print(f"{colorize(str(content), Colors.BRIGHT_YELLOW)}")
                         tool_results_shown.add(tool_id)
             
             last_messages_count = len(token_messages)
@@ -681,7 +537,6 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
         
         # Handle tool execution results (if token is a ToolMessage)
         if is_tool_message or node in ["tools", "tool"]:
-            tool_execution_phase = True
             # Extract tool name and content
             if hasattr(token, "name"):
                 tool_name = token.name
@@ -700,8 +555,8 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
             # Show tool result if we haven't shown it yet
             tool_id = f"{tool_name}_{str(content)[:50]}"
             if tool_name and tool_id not in tool_results_shown:
-                print(f"  {colorize('→ Result:', Colors.MAGENTA, bold=True)} {colorize(str(content), Colors.BRIGHT_YELLOW)}")
-                print()  # Add spacing
+                print_tool_call(f"{tool_name} (result)")
+                print(f"{colorize(str(content), Colors.BRIGHT_YELLOW)}")
                 tool_results_shown.add(tool_id)
             continue
         
@@ -728,13 +583,6 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     if text:
                         text = str(text)
                         if text:
-                            # If we just finished tool execution, add separator before response
-                            if tool_execution_phase and not response_started:
-                                print(f"{colorize('─' * 60, Colors.CYAN)}")
-                                print(f"{colorize('💬 Response:', Colors.BRIGHT_GREEN, bold=True)}")
-                                print()  # Add spacing
-                                response_started = True
-                                tool_execution_phase = False
                             # Colorize the streaming text
                             print(f"{colorize(text, Colors.BRIGHT_WHITE)}", end="", flush=True)
                 
@@ -746,16 +594,7 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                     
                     # Show tool call info when we have the name
                     if tool_name and tool_id and tool_name not in tool_calls_shown:
-                        tool_execution_phase = True
-                        if not response_started:
-                            print()  # Add spacing before tool calls
-                        print(f"{colorize('🔧', Colors.BRIGHT_MAGENTA)}  {colorize('Calling tool:', Colors.MAGENTA, bold=True)} {colorize(tool_name, Colors.BRIGHT_MAGENTA, bold=True)}")
-                        if tool_args and isinstance(tool_args, dict) and tool_args:
-                            # Display tool arguments if available
-                            args_str = ", ".join([f"{k}={v}" for k, v in tool_args.items() if v])
-                            if args_str:
-                                print(f"  {colorize('Arguments:', Colors.DIM)} {colorize(args_str, Colors.WHITE)}")
-                        print()  # Add spacing after tool call
+                        print_tool_call(tool_name)
                         tool_calls_shown.add(tool_name)
                     # Stream tool args as they're generated (optional - usually not needed)
                     elif tool_args and isinstance(tool_args, str) and tool_args.strip():
@@ -767,19 +606,9 @@ def stream_agent_response(agent, messages: list, config: dict, context: Context)
                 if block.type == "text" and hasattr(block, "text"):
                     text = str(block.text)
                     if text:
-                        # If we just finished tool execution, add separator before response
-                        if tool_execution_phase and not response_started:
-                            print(f"{colorize('─' * 60, Colors.CYAN)}")
-                            print(f"{colorize('💬 Response:', Colors.BRIGHT_GREEN, bold=True)}")
-                            print()  # Add spacing
-                            response_started = True
-                            tool_execution_phase = False
                         print(f"{colorize(text, Colors.BRIGHT_WHITE)}", end="", flush=True)
     
     print()  # Final newline after streaming
-    print()  # Add extra spacing after response
-    
-    return final_state
 
 
 # Run agent
@@ -848,36 +677,12 @@ if __name__ == "__main__":
         
         # Process user input with agent
         print(f"{colorize('Agent:', Colors.BRIGHT_GREEN, bold=True)} ", end="")
-        final_state = stream_agent_response(
+        stream_agent_response(
             agent=agent,
             messages=[{"role": "user", "content": user_input}],
             config=config,
             context=Context(user_id="1")
         )
-        
-        # Display structured response if available
-        if final_state:
-            structured = None
-            if isinstance(final_state, dict):
-                structured = final_state.get("structured_response")
-            elif hasattr(final_state, "structured_response"):
-                structured = final_state.structured_response
-            
-            if structured:
-                print()  # Add spacing before structured response
-                print_header("Structured Response", "📦")
-                if isinstance(structured, dict):
-                    response_text = structured.get("response", "")
-                elif hasattr(structured, "response"):
-                    response_text = structured.response
-                elif hasattr(structured, "model_dump"):
-                    response_text = structured.model_dump().get("response", "")
-                else:
-                    response_text = str(structured)
-                
-                if response_text:
-                    print(f"{colorize(response_text, Colors.BRIGHT_WHITE)}")
-                print()  # Add spacing after structured response
         
         print()  # Add spacing between interactions
 
